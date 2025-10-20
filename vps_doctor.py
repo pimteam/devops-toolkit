@@ -16,7 +16,7 @@ if not GEMINI_API_KEY:
     print("Please set it before running the script: export GEMINI_API_KEY='your_key'")
     sys.exit(1)
 
-GEMINI_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key= {GEMINI_API_KEY}"
+GEMINI_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key= {GEMINI_API_KEY}"
 TIME_RANGE_MINUTES = 15
 
 def run_command(command):
@@ -72,9 +72,9 @@ def get_loki_logs():
         return "Unexpected response format received from Loki."
 
 # +++ NEW FUNCTION FOR AI ANALYSIS +++
-def analyze_with_ai(system_data, loki_logs):
+def analyze_with_ai(system_data, loki_logs, user_specific):
     """Sends the collected data to an AI model for analysis."""
-    print("3. Sending data to AI for analysis... (may take up to a minute)")
+    print("3. Sending data to AI for analysis... (may take up to 3 minutes)")
 
     # This is the "magic" - Prompt Engineering!
     prompt = f"""
@@ -95,6 +95,8 @@ Analyze the above data in several steps:
 5. **Ignore the following: requests to /aacn-forum-log/endpoint.php - this is legitimate, we know about it and it's fine.
 6. **We already have PHP-FPM slow log, MySQL slow log, and Fail2Ban in place. Skip those obvious recommendations.
 7. **We usually request your help when the server is overloaded. Pay special attention to high-load indications and to what might be causing the high load.
+
+{user_specific}
 """
 
     headers = {'Content-Type': 'application/json'}
@@ -121,14 +123,40 @@ Analyze the above data in several steps:
 
 # --- FINAL MAIN LOGIC ---
 if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser(description="VPS-Doctor: AI-powered server diagnostics tool.")
+    parser.add_argument(
+        '--user',
+        type=str,
+        default='Rob',
+        help="Specify the user for tailored AI responses. 'Bob' for technical/admin, 'Rob' for knowledgeable but not the server admin."
+    )
+    args = parser.parse_args()
+
     # Step 1: Collect data
     system_data = get_system_snapshot()
 
     # Step 2: Download logs
     loki_logs = get_loki_logs()
 
+    user_specific = ""
+    if args.user.lower() == 'bob':
+        #print(f"User is Bob. Generating a detailed, technical analysis.")
+        user_specific = """
+--- User Context ---
+The user is 'Bob', the server administrator. He is technically proficient.
+Provide a detailed, technical, and in-depth analysis. Include specific command examples if relevant. Do not oversimplify the explanations.
+"""
+    else: # This covers Rob and any other default case
+        #print(f"User is Rob. Generating a slightly less technical, high-level analysis.")
+        user_specific = """
+--- User Context ---
+The user is 'Rob', a technically literate site owner but not a server administrator.
+Provide a clear, concise, and slightly less technical analysis. Focus on the 'what' and 'why' of the problem and the recommended actions. Avoid overly complex jargon where possible, but keep the core technical details. Make the recommendations easy to understand and follow.
+"""
+
     # Step 3: Send everything for analysis
-    ai_analysis = analyze_with_ai(system_data, loki_logs)
+    ai_analysis = analyze_with_ai(system_data, loki_logs, user_specific)
 
     # Step 4: Show the result!
     print("\n======================================")
