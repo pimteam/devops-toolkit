@@ -28,3 +28,11 @@ scrape_configs:
       max_age: 12h
       labels:
         job: syslog
+
+  - job_name: mysql
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: mysql
+          __path__: /var/log/mysql-slow.log
