@@ -1,115 +1,138 @@
 import subprocess
 import requests
 import json
-from datetime import datetime, timedelta, timezone
 import os
 import sys
+from datetime import datetime, timedelta, timezone
 
-# --- CONFIG ---
+# --- CONFIGURATION ---
 LOKI_URL = "http://localhost:3100"
+
+# Read the key from the environment variable
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
 if not GEMINI_API_KEY:
-    print("Error: env variable GEMINI_API_KEY is not set.")
+    print("Error: The environment variable GEMINI_API_KEY is not set.")
+    print("Please set it before running the script: export GEMINI_API_KEY='your_key'")
     sys.exit(1)
 
-GEMINI_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-latest:generateContent?key={GEMINI_API_KEY}"
-TIME_RANGE_MINUTES = 15 # How many minutes back to look at the logs
+GEMINI_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key= {GEMINI_API_KEY}"
+TIME_RANGE_MINUTES = 15
 
 def run_command(command):
-    """Execute commands and return string."""
+    """Executes a system command and returns the result as a string."""
     try:
-        # shell=True is necessary for commanda with pipe '|' or wildcard '*', and it's good to be careful
         result = subprocess.run(
-            command,
-            shell=True,
-            check=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True
+            command, shell=True, check=True,
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
         )
         return result.stdout
     except subprocess.CalledProcessError as e:
         return f"Error executing '{command}': {e.stderr}"
 
 def get_system_snapshot():
-    """Collecting system data."""
-    print("1. Collecting system data...")
-    snapshot = "--- System Snapshot ---\n\n"
-
-    # Use top in "batch mode" (-b) for 1 iteration (-n 1)
+    """Collects real-time system data."""
+    print("1. Collecting real-time system data...")
+    snapshot = "--- System Snapshot --- (as of " + datetime.now().strftime("%Y-%m-%d %H:%M:%S") + ")\n\n"
     snapshot += "== CPU and Memory Usage (top) ==\n"
     snapshot += run_command("top -b -n 1 | head -n 15") + "\n\n"
-
     snapshot += "== Memory Usage (free) ==\n"
     snapshot += run_command("free -h") + "\n\n"
-
     snapshot += "== Disk Usage (df) ==\n"
     snapshot += run_command("df -h") + "\n\n"
-
     snapshot += "== System Uptime and Load ==\n"
     snapshot += run_command("uptime") + "\n\n"
-
     return snapshot
 
 def get_loki_logs():
-    """Extract logs from Loki for the last N mins."""
-    print(f"2. Extract logs from Loki for the last {TIME_RANGE_MINUTES} mins...")
-
-    # Loki expects the time in nano seconds (RFC3339Nano)
+    """Downloads logs from Loki for the last N minutes."""
+    print(f"2. Downloading logs from Loki for the last {TIME_RANGE_MINUTES} minutes...")
     end_time = datetime.now(timezone.utc)
     start_time = end_time - timedelta(minutes=TIME_RANGE_MINUTES)
-
-    # Format the time for Loki
     start_nano = int(start_time.timestamp() * 1e9)
     end_nano = int(end_time.timestamp() * 1e9)
-
-    # This is our log query. `|= ""` wll catch all rows
     log_query = '{job=~"nginx|php_fpm|mysql"}'
-
     api_endpoint = f"{LOKI_URL}/loki/api/v1/query_range"
-    params = {
-        'query': log_query,
-        'start': str(start_nano),
-        'end': str(end_nano),
-        'limit': 1000, # Max number of rows
-        'direction': 'forward'
-    }
+    params = {'query': log_query, 'start': str(start_nano), 'end': str(end_nano), 'limit': 1000, 'direction': 'forward'}
 
     try:
         response = requests.get(api_endpoint, params=params)
-        response.raise_for_status()  # Error if the status code is not 2xx
+        response.raise_for_status()
         results = response.json()['data']['result']
-
-        # Make logs readable
-        log_entries = []
-        # Sort by timestamp
         all_values = sorted([val for res in results for val in res['values']], key=lambda x: x[0])
-
-        for entry in all_values:
-            ts = datetime.fromtimestamp(int(entry[0]) / 1e9).strftime('%Y-%m-%d %H:%M:%S')
-            log_line = entry[1]
-            log_entries.append(f"[{ts}] {log_line}")
+        log_entries = [f"[{datetime.fromtimestamp(int(entry[0]) / 1e9).strftime('%Y-%m-%d %H:%M:%S')}] {entry[1]}" for entry in all_values]
 
         if not log_entries:
-            return "No logs for the selected period."
+            return "--- Logs ---\n\nNo logs found for the selected period."
 
-        return "\n".join(log_entries)
-
+        return "--- Logs ---\n\n" + "\n".join(log_entries)
     except requests.exceptions.RequestException as e:
         return f"Error connecting to Loki: {e}"
     except (KeyError, IndexError):
-        return "Received unexpected responce format from Loki."
-# ++++++++++++++++++++++
+        return "Unexpected response format received from Loki."
+
+# +++ NEW FUNCTION FOR AI ANALYSIS +++
+def analyze_with_ai(system_data, loki_logs):
+    """Sends the collected data to an AI model for analysis."""
+    print("3. Sending data to AI for analysis... (may take up to a minute)")
+
+    # This is the "magic" - Prompt Engineering!
+    prompt = f"""
+You are an expert DevOps assistant called "VPS-Doctor". Your task is to analyze system data and logs from a Linux server running a WordPress site (LEMP stack).
+
+Here are the data you need to analyze:
+
+{system_data}
+
+{loki_logs}
+
+--- YOUR TASK ---
+Analyze the above data in several steps:
+1. **Status Summary:** Write 1-2 sentences about the general state of the server. Is there high load, low memory, or other obvious issues?
+2. **Identified Issues:** Review the logs and system data for anomalies, errors, warnings, slow queries, or unusual values. List them. If there are no issues, state it clearly.
+3. **Recommendations:** For each identified issue, give a specific, actionable recommendation on what to do. For example: "The PHP error in 'some-plugin' suggests a plugin issue. Try temporarily disabling it." or "The high CPU load comes from process 'X', check what it's doing."
+4. **Format the response** with Markdown for better readability.
+5. **Ignore the following: requests to /aacn-forum-log/endpoint.php - this is legitimate, we know about it and it's fine.
+6. **We already have PHP-FPM slow log, MySQL slow log, and Fail2Ban in place. Skip those obvious recommendations.
+7. **We usually request your help when the server is overloaded. Pay special attention to high-load indications and to what might be causing the high load.
+"""
+
+    headers = {'Content-Type': 'application/json'}
+    data = {
+        "contents": [{
+            "parts": [{"text": prompt}]
+        }]
+    }
+
+    try:
+        response = requests.post(GEMINI_API_URL, headers=headers, json=data, timeout=180)
+        response.raise_for_status()
+
+        # Decode the response from Gemini
+        result = response.json()
+        analysis = result['candidates'][0]['content']['parts'][0]['text']
+        return analysis
+    except requests.exceptions.RequestException as e:
+        return f"Error connecting to AI API: {e}"
+    except (KeyError, IndexError) as e:
+        return f"Error: Unexpected response format received from AI. {e}\n\nResponse:\n{response.text}"
+# +++++++++++++++++++++++++++++++++++++
 
 
-# --- Main script logic ---
+# --- FINAL MAIN LOGIC ---
 if __name__ == "__main__":
+    # Step 1: Collect data
     system_data = get_system_snapshot()
 
+    # Step 2: Download logs
     loki_logs = get_loki_logs()
 
-    print("\n--- Colecting system data ---\n")
-    print(system_data)
+    # Step 3: Send everything for analysis
+    ai_analysis = analyze_with_ai(system_data, loki_logs)
 
-    print(f"\n--- Logs for the last {TIME_RANGE_MINUTES} minutes ---\n")
-    print(loki_logs)
+    # Step 4: Show the result!
+    print("\n======================================")
+    print("    🩺 V P S - D O C T O R 🩺")
+    print("======================================")
+    print("\n--- AI Analysis and Recommendations ---\n")
+    print(ai_analysis)
