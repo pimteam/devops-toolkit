@@ -16,7 +16,7 @@ if not GEMINI_API_KEY:
     print("Please set it before running the script: export GEMINI_API_KEY='your_key'")
     sys.exit(1)
 
-GEMINI_API_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key= {GEMINI_API_KEY}"
+GEMINI_API_URL_TEMPLATE = "https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={api_key}"
 TIME_RANGE_MINUTES = 15
 
 def run_command(command):
@@ -72,7 +72,7 @@ def get_loki_logs():
         return "Unexpected response format received from Loki."
 
 # +++ NEW FUNCTION FOR AI ANALYSIS +++
-def analyze_with_ai(system_data, loki_logs, user_specific):
+def analyze_with_ai(system_data, loki_logs, user_specific, model_name):
     """Sends the collected data to an AI model for analysis."""
     print("3. Sending data to AI for analysis... (may take up to 3 minutes)")
 
@@ -107,7 +107,8 @@ Analyze the above data in several steps:
     }
 
     try:
-        response = requests.post(GEMINI_API_URL, headers=headers, json=data, timeout=180)
+        final_api_url = GEMINI_API_URL_TEMPLATE.format(model_name=model_name, api_key=GEMINI_API_KEY)
+        response = requests.post(final_api_url, headers=headers, json=data, timeout=180)
         response.raise_for_status()
 
         # Decode the response from Gemini
@@ -130,6 +131,13 @@ if __name__ == "__main__":
         type=str,
         default='Rob',
         help="Specify the user for tailored AI responses. 'Bob' for technical/admin, 'Rob' for knowledgeable but not the server admin."
+    )
+    parser.add_argument(
+        '--level',
+        type=str,
+        default='flash',
+        choices=['flash', 'pro'], # Ограничаваме избора до 'flash' и 'pro'
+        help="Specify Gemini model: 'flash' (faster) or 'pro' (more powerful)."
     )
     args = parser.parse_args()
 
@@ -154,9 +162,14 @@ Provide a detailed, technical, and in-depth analysis. Include specific command e
 The user is 'Rob', a technically literate site owner but not a server administrator.
 Provide a clear, concise, and slightly less technical analysis. Focus on the 'what' and 'why' of the problem and the recommended actions. Avoid overly complex jargon where possible, but keep the core technical details. Make the recommendations easy to understand and follow.
 """
+    model_name = ""
+    if args.level.lower() == 'pro':
+        model_name = "gemini-2.5-pro"
+    else:
+        model_name = "gemini-2.5-flash"
 
     # Step 3: Send everything for analysis
-    ai_analysis = analyze_with_ai(system_data, loki_logs, user_specific)
+    ai_analysis = analyze_with_ai(system_data, loki_logs, user_specific, model_name)
 
     # Step 4: Show the result!
     print("\n======================================")
