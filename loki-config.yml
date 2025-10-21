@@ -29,3 +29,7 @@ schema_config:
 limits_config:
   ingestion_rate_mb: 100
   ingestion_burst_size_mb: 200
+
+table_manager:
+  retention_deletes_enabled: true
+  retention_period: 168h   # 7 дни
